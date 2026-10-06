@@ -26,7 +26,7 @@ Drive with **W/S** for throttle and brake and **A/D** to steer.
 | `--tire-step S` | tire internal step in seconds, default `1e-4` |
 | `--speed-limit V` | speed the throttle ramp is scaled toward, default 20 m/s |
 | `--duration S` | stop after S simulated seconds |
-| `--headless` | no window. Parks the car on the road and checks that it stays there |
+| `--headless` | no window. Sets the car down with the brakes on and checks that it rests on the road |
 
 PyChrono has to come from the `projectchrono` conda channel. The `conda-forge` package of the
 same name has no vehicle or VSG module.
