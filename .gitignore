@@ -1,0 +1,5 @@
+scene/
+scene.partial/
+scene.download
+__pycache__/
+.DS_Store
