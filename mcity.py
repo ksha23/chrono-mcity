@@ -11,6 +11,10 @@ only a stock PyChrono with the vehicle and VSG modules.
 
 Controls: W/S throttle and brake, A/D steer, plus the usual VSG camera keys.
 
+Vegetation is optional, a second download of 160 MB that happens the first time you ask for it:
+
+    python mcity.py --foliage trees     # or trees-leaf, shrubs, full
+
 To put Mcity in a simulation of your own, import this file:
 
     import mcity
@@ -33,14 +37,35 @@ import tarfile
 import time
 import urllib.request
 
-# The published scene. One pinned archive, checked against its hash before anything is unpacked,
+# The published scene. Pinned archives, each checked against its hash before anything is unpacked,
 # so a changed or truncated download fails here and not later as a half-loaded scene.
-SCENE_URL = "https://github.com/ksha23/chrono-mcity/releases/download/v1/mcity_scene_base.tar.gz"
+RELEASE = "https://github.com/ksha23/chrono-mcity/releases/download/v1/"
+SCENE_URL = RELEASE + "mcity_scene_base.tar.gz"
 SCENE_SHA256 = "41b0e14eb0a10609fde95621a2085ab194d8aa4de45054bb8f09a76a766a41f7"
+# Vegetation, as an add-on that unpacks over the base scene. Only fetched when asked for.
+FOLIAGE_URL = RELEASE + "mcity_scene_foliage.tar.gz"
+FOLIAGE_SHA256 = "246434ba4e3249fd50b08cf50411b38f48bd6d451575a3731401139c35995c87"
 SCENE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scene")
 
 MANIFEST = "mcity_scene.json"
 GROUND = "mcity_ground.obj"
+
+# Vegetation levels and the manifest each one loads. The source plants are scan-grade models, so
+# every level is a different answer to what to give up: shrubs, leaves, or neither.
+FOLIAGE = {
+    "none": MANIFEST,
+    "trees": "mcity_scene_trees_bare.json",
+    "trees-leaf": "mcity_scene_trees_leaf.json",
+    "shrubs": "mcity_scene_all_bare.json",
+    "full": "mcity_scene_full.json",
+}
+
+# Roughly what each level needs in memory on stock PyChrono, in GB. Stock Chrono::VSG gives every
+# placement of a mesh its own vertex buffer, so the cost follows the triangles placed and not the
+# triangles stored: 1.4 M with no vegetation, 13 M, 22 M, 60 M and 143 M for the four levels.
+# The first three are measured on build 1187. At "shrubs" the GPU ran out on a 48 GB machine, and
+# "full" is extrapolated from its triangle count.
+FOLIAGE_MEMORY_GB = {"none": 5, "trees": 10, "trees-leaf": 14, "shrubs": 32, "full": 70}
 
 # A pose on a real Mcity lane, facing along the carriageway: x, y in metres and yaw in radians.
 # The site keeps its real elevation, so the road here is near z = 274 m and not z = 0.
@@ -52,21 +77,49 @@ START_X, START_Y, START_YAW = 158.923, 62.991, 1.285431
 # --------------------------------------------------------------------------------------------
 
 
-def fetch(scene_dir=SCENE_DIR, url=None):
-    """Return a directory holding the Mcity scene, downloading and unpacking it if needed."""
-    scene_dir = os.path.abspath(scene_dir)
-    if os.path.isfile(os.path.join(scene_dir, MANIFEST)) and os.path.isfile(os.path.join(scene_dir, GROUND)):
-        return scene_dir
-    if os.path.isdir(scene_dir) and os.listdir(scene_dir):
-        raise SystemExit(f"{scene_dir} exists but holds no Mcity scene. Remove it, or pass another --data directory.")
+def fetch(scene_dir=SCENE_DIR, foliage="none"):
+    """Return a directory holding the Mcity scene, downloading and unpacking it if needed.
 
-    url = url or os.environ.get("MCITY_SCENE_URL", SCENE_URL)
-    parent = os.path.dirname(scene_dir)
-    os.makedirs(parent, exist_ok=True)
+    foliage is one of the FOLIAGE levels. Anything but "none" also needs the vegetation add-on,
+    which is fetched into the same directory the first time it is asked for.
+    """
+    if foliage not in FOLIAGE:
+        raise ValueError(f"unknown foliage level {foliage!r}, expected one of {', '.join(FOLIAGE)}")
+    scene_dir = os.path.abspath(scene_dir)
+
+    if not (_has(scene_dir, MANIFEST) and _has(scene_dir, GROUND)):
+        if os.path.isdir(scene_dir) and os.listdir(scene_dir):
+            raise SystemExit(f"{scene_dir} exists but holds no Mcity scene. Remove it, or pass another --data directory.")
+        print(f"Mcity scene not found in {scene_dir}")
+        partial = _download_and_unpack(os.environ.get("MCITY_SCENE_URL", SCENE_URL), SCENE_SHA256, scene_dir)
+        if os.path.isdir(scene_dir):
+            os.rmdir(scene_dir)
+        os.replace(partial, scene_dir)
+        print(f"  scene ready in {scene_dir}")
+
+    if foliage != "none" and not all(_has(scene_dir, m) for m in FOLIAGE.values()):
+        print(f"Mcity vegetation not found in {scene_dir}")
+        partial = _download_and_unpack(os.environ.get("MCITY_FOLIAGE_URL", FOLIAGE_URL), FOLIAGE_SHA256, scene_dir)
+        _merge(partial, scene_dir)
+        print("  vegetation ready")
+
+    return scene_dir
+
+
+def _has(scene_dir, name):
+    return os.path.isfile(os.path.join(scene_dir, name))
+
+
+def _download_and_unpack(url, sha256, scene_dir):
+    """Download one archive, check it, and unpack it beside scene_dir. Returns the unpacked path.
+
+    Unpacking beside the target and moving into place afterwards means an interrupted run cannot
+    leave behind something that looks like a scene but is missing half its files.
+    """
+    os.makedirs(os.path.dirname(scene_dir), exist_ok=True)
     archive = scene_dir + ".download"
     partial = scene_dir + ".partial"
 
-    print(f"Mcity scene not found in {scene_dir}")
     print(f"  downloading {url}")
     digest = hashlib.sha256()
     try:
@@ -90,12 +143,10 @@ def fetch(scene_dir=SCENE_DIR, url=None):
         _remove(archive)
         raise SystemExit(f"  download failed: {err}\n  Fetch it by hand (see the README) and pass --data DIR.")
 
-    if digest.hexdigest() != SCENE_SHA256:
+    if digest.hexdigest() != sha256:
         _remove(archive)
-        raise SystemExit(f"  checksum mismatch\n    expected {SCENE_SHA256}\n    got      {digest.hexdigest()}")
+        raise SystemExit(f"  checksum mismatch\n    expected {sha256}\n    got      {digest.hexdigest()}")
 
-    # Unpack beside the target and rename at the end, so an interrupted run cannot leave behind
-    # something that looks like a scene but is missing half its files.
     print("  unpacking")
     shutil.rmtree(partial, ignore_errors=True)
     with tarfile.open(archive) as tar:
@@ -103,12 +154,28 @@ def fetch(scene_dir=SCENE_DIR, url=None):
             tar.extractall(partial, filter="data")
         except TypeError:  # Python older than 3.12 has no extraction filters
             tar.extractall(partial)
-    if os.path.isdir(scene_dir):
-        os.rmdir(scene_dir)
-    os.replace(partial, scene_dir)
     _remove(archive)
-    print(f"  scene ready in {scene_dir}")
-    return scene_dir
+    return partial
+
+
+def _merge(src, dst):
+    """Move an unpacked add-on into an existing scene, manifests last.
+
+    A manifest is what says its meshes are present, so it must not arrive before they do.
+    """
+    manifests = []
+    for root, _, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        os.makedirs(os.path.join(dst, rel), exist_ok=True)
+        for name in files:
+            pair = (os.path.join(root, name), os.path.join(dst, rel, name))
+            if rel == "." and name.endswith(".json"):
+                manifests.append(pair)
+            else:
+                os.replace(*pair)
+    for pair in manifests:
+        os.replace(*pair)
+    shutil.rmtree(src, ignore_errors=True)
 
 
 def _remove(path):
@@ -123,7 +190,7 @@ def _remove(path):
 # --------------------------------------------------------------------------------------------
 
 
-def add_scenery(system, scene_dir, manifest=MANIFEST, groups=None, verbose=True):
+def add_scenery(system, scene_dir, foliage="none", groups=None, verbose=True):
     """Add everything you see: buildings, poles, signals, signs, barriers and the road surface.
 
     The manifest lists a few hundred meshes and the placements they appear at. Each mesh becomes
@@ -131,11 +198,16 @@ def add_scenery(system, scene_dir, manifest=MANIFEST, groups=None, verbose=True)
     often it appears. The bodies are fixed and carry no collision geometry. Scenery never reaches
     the solver, and the driving surface is a separate object: see add_ground.
 
-    groups, if given, keeps only those manifest groups. Returns the bodies, one per group.
+    foliage picks the vegetation level, one of FOLIAGE. Anything but "none" needs the add-on
+    that fetch(foliage=...) downloads. groups, if given, keeps only those manifest groups.
+    Returns the bodies, one per group.
     """
     import pychrono as chrono
 
-    with open(os.path.join(scene_dir, manifest)) as f:
+    manifest = os.path.join(scene_dir, FOLIAGE[foliage])
+    if not os.path.isfile(manifest):
+        raise SystemExit(f"{manifest} is missing. Call mcity.fetch(foliage={foliage!r}) first.")
+    with open(manifest) as f:
         doc = json.load(f)
     assets = doc["assets"]
 
@@ -292,17 +364,30 @@ def ground_height(scene_dir, x, y, radius=2.0):
 # The demo
 # --------------------------------------------------------------------------------------------
 
+FOLIAGE_HELP = """vegetation level (default: none). The first use downloads 160 MB more.
+Memory is what stock PyChrono needs, and anything but none draws slower than real time.
+  none        no vegetation                          5 GB
+  trees       383 trees, bare branches              10 GB
+  trees-leaf  447 trees with leaves                 14 GB
+  shrubs      1623 trees and shrubs, bare branches  32 GB
+  full        2009 trees and shrubs with leaves     70 GB"""
+
 TIRES = {"pac02": "audi/json/audi_Pac02Tire.json", "tmeasy": "audi/json/audi_TMeasyTire.json", "rigid": "audi/json/audi_RigidTire.json"}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Drive an Audi around the Mcity digital twin. W/S throttle and brake, A/D steer.")
+    parser = argparse.ArgumentParser(
+        description="Drive an Audi around the Mcity digital twin. W/S throttle and brake, A/D steer.",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     parser.add_argument("--data", metavar="DIR", default=SCENE_DIR, help="scene directory, downloaded into if empty (default: scene/ beside this file)")
+    parser.add_argument("--foliage", choices=list(FOLIAGE), default="none", help=FOLIAGE_HELP)
     parser.add_argument("--tire", choices=sorted(TIRES), default="pac02", help="tire model (default: pac02)")
     parser.add_argument("--tire-step", metavar="S", type=float, default=1e-4, help="tire internal step in seconds (default: 1e-4)")
     parser.add_argument("--speed-limit", metavar="V", type=float, default=20.0, help="speed the throttle ramp is scaled toward, m/s (default: 20)")
     parser.add_argument("--duration", metavar="S", type=float, default=None, help="stop after this many simulated seconds (default: run until the window closes)")
     parser.add_argument("--headless", action="store_true", help="no window: simulate with the vehicle parked and print where it is")
+    parser.add_argument("--force", action="store_true", help="load a vegetation level even if it looks too big for this machine's memory")
     args = parser.parse_args()
 
     try:
@@ -317,7 +402,19 @@ def main():
             "  conda install projectchrono::pychrono -c conda-forge"
         )
 
-    scene = fetch(args.data)
+    # A headless run draws nothing, so it has no use for vegetation.
+    foliage = "none" if args.headless else args.foliage
+    if foliage != "none":
+        # Checked before the download, so nobody fetches 160 MB only to be turned away.
+        need, have = FOLIAGE_MEMORY_GB[foliage], _physical_memory_gb()
+        print(f"Vegetation level '{foliage}' needs about {need} GB of memory on stock PyChrono and draws slower than real time.")
+        if have is not None and need > 0.6 * have and not args.force:
+            raise SystemExit(
+                f"  That is too much for the {have:.0f} GB in this machine. Stock Chrono::VSG keeps a separate copy\n"
+                "  of the geometry for every plant, so the heavier levels run the GPU out of memory.\n"
+                "  Pick a lighter level, or pass --force to try anyway."
+            )
+    scene = fetch(args.data, foliage)
     boot = time.perf_counter()
 
     system = chrono.ChSystemNSC()
@@ -330,7 +427,7 @@ def main():
     system.SetMaxPenetrationRecoverySpeed(4.0)
 
     if not args.headless:
-        add_scenery(system, scene)
+        add_scenery(system, scene, foliage)
     terrain = add_ground(system, scene)
 
     z = ground_height(scene, START_X, START_Y)
@@ -364,6 +461,13 @@ def main():
     # already worked. Leave without running destructors.
     sys.stdout.flush()
     os._exit(0)
+
+
+def _physical_memory_gb():
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
+    except (AttributeError, ValueError, OSError):  # not available everywhere, Windows for one
+        return None
 
 
 def run_window(system, audi, terrain, chrono, veh, step, args, boot):
