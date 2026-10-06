@@ -9,7 +9,9 @@ The first run downloads the scene (211 MB) into scene/ beside this file and chec
 After that it starts straight away. Nothing is converted and Chrono is not modified: this needs
 only a stock PyChrono with the vehicle and VSG modules.
 
-Controls: W/S throttle and brake, A/D steer, plus the usual VSG camera keys.
+Controls: hold W to accelerate and S to brake, hold A or D to steer. Let go and the car coasts
+and the wheel centres, as in a driving game. --keys step gives Chrono's older behaviour, where
+each press nudges an input and it stays there.
 
 Vegetation is optional, a second download that happens the first time you ask for it:
 
@@ -494,7 +496,7 @@ TIRES = {"pac02": "audi/json/audi_Pac02Tire.json", "tmeasy": "audi/json/audi_TMe
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Drive an Audi around the Mcity digital twin. W/S throttle and brake, A/D steer.",
+        description="Drive an Audi around the Mcity digital twin. Hold W/S for throttle and brake, A/D to steer.",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("--data", metavar="DIR", default=SCENE_DIR, help="scene directory, downloaded into if empty (default: scene/ beside this file)")
@@ -504,7 +506,8 @@ def main():
     parser.add_argument("--no-shadows", action="store_true", help="do not draw shadows. Worth trying on a slow GPU: stock Chrono redraws the scene for every shadow map")
     parser.add_argument("--tire", choices=sorted(TIRES), default="pac02", help="tire model (default: pac02)")
     parser.add_argument("--tire-step", metavar="S", type=float, default=1e-4, help="tire internal step in seconds (default: 1e-4)")
-    parser.add_argument("--speed-limit", metavar="V", type=float, default=20.0, help="speed the throttle ramp is scaled toward, m/s (default: 20)")
+    parser.add_argument("--keys", choices=["held", "step"], default="held", help="held: inputs follow the keys held down, as in a driving game (default)\nstep: each press nudges an input, which then stays put")
+    parser.add_argument("--speed-limit", metavar="V", type=float, default=20.0, help="with --keys step, the speed the throttle steps are scaled toward, m/s (default: 20)")
     parser.add_argument("--duration", metavar="S", type=float, default=None, help="stop after this many simulated seconds (default: run until the window closes)")
     parser.add_argument("--headless", action="store_true", help="no window: simulate with the vehicle parked and print where it is")
     parser.add_argument("--force", action="store_true", help="load a vegetation level even if it looks too big for this machine's memory")
@@ -591,12 +594,23 @@ def _physical_memory_gb():
 
 def run_window(system, audi, terrain, chrono, veh, step, args, boot, sky_texture):
     driver = veh.ChInteractiveDriver(audi)
-    driver.SetSteeringDelta(0.04)
-    driver.SetThrottleDelta(1.0 / max(1.0, args.speed_limit))
-    driver.SetBrakingDelta(0.3)
+    held = args.keys == "held"
+    if held and not hasattr(veh.ChInteractiveDriver, "KeyboardMode_HELD"):
+        print("  This PyChrono has no held-key driving, so falling back to --keys step.")
+        held = False
+    if held:
+        # Pedals and wheel follow the keys that are down, and ease toward them: Chrono's driver
+        # approaches each target with a time constant of a quarter of a second.
+        driver.SetKeyboardMode(veh.ChInteractiveDriver.KeyboardMode_HELD)
+    else:
+        driver.SetSteeringDelta(0.04)
+        driver.SetThrottleDelta(1.0 / max(1.0, args.speed_limit))
+        driver.SetBrakingDelta(0.3)
     driver.Initialize()
 
     vis = veh.ChWheeledVehicleVisualSystemVSG()
+    if held and hasattr(vis, "SetKeyboardMode"):
+        vis.SetKeyboardMode(veh.ChInteractiveDriver.KeyboardMode_HELD)
     vis.SetWindowTitle("Mcity")
     vis.SetWindowSize(1600, 900)
     vis.AttachVehicle(audi)
@@ -613,7 +627,10 @@ def run_window(system, audi, terrain, chrono, veh, step, args, boot, sky_texture
     vis.Initialize()
 
     print(f"\n  [{time.perf_counter() - boot:.1f} s to build the scene and open the window]")
-    print("W/S throttle and brake, A/D steer.\n")
+    if held:
+        print("Hold W to accelerate, S to brake, A or D to steer. Let go to coast and centre.\n")
+    else:
+        print("W/S step the throttle and brake, A/D step the steering.\n")
 
     render_step = 1.0 / 50  # physics wants 1 kHz, the display does not
     next_render = next_report = 0.0

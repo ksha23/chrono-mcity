@@ -17,18 +17,20 @@ python mcity.py
 The first run downloads the scene (211 MB) into `scene/` beside the script, checks its SHA-256
 and unpacks it. Later runs start in a few seconds.
 
-Drive with **W/S** for throttle and brake and **A/D** to steer.
+Hold **W** to accelerate and **S** to brake, and hold **A** or **D** to steer. Let go and the car
+coasts and the wheel centres, as in a driving game.
 
 | Option | |
 | --- | --- |
 | `--foliage LEVEL` | vegetation: `none`, `trees`, `trees-leaf`, `shrubs` or `full`. See below |
 | `--signals COLOUR` | light the traffic signal lenses: `red`, `amber`, `green` or `all` |
+| `--keys held\|step` | `held`, the default, follows the keys held down. `step` is Chrono's older behaviour: each press nudges an input and it stays there |
 | `--no-sky` | plain background instead of the sky dome |
 | `--no-shadows` | do not draw shadows. Worth trying on a slow GPU |
 | `--data DIR` | keep the scene somewhere else |
 | `--tire pac02\|tmeasy\|rigid` | tire model, default `pac02` |
 | `--tire-step S` | tire internal step in seconds, default `1e-4` |
-| `--speed-limit V` | speed the throttle ramp is scaled toward, default 20 m/s |
+| `--speed-limit V` | with `--keys step`, the speed the throttle steps are scaled toward, default 20 m/s |
 | `--duration S` | stop after S simulated seconds |
 | `--headless` | no window. Sets the car down with the brakes on and checks that it rests on the road |
 | `--force` | load a vegetation level even if it looks too big for this machine |
