@@ -195,8 +195,8 @@ The scene is not a byte copy of upstream. These are the deliberate differences:
 ## Tested with
 
 PyChrono 10.0.0 from the `projectchrono` channel, conda build `py313_1187`, on macOS (Apple
-silicon). The first release was also run on build `py312_677`. Linux and Windows have not been
-tried.
+silicon). On build `py312_677` the scene loads and the headless check passes. Linux and Windows
+have not been tried.
 
 ## How the scene was built
 

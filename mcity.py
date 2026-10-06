@@ -92,9 +92,10 @@ def fetch(scene_dir=SCENE_DIR, foliage="none"):
 
     have = _has(scene_dir, MANIFEST) and _has(scene_dir, GROUND)
     if have and _version(scene_dir) < SCENE_VERSION:
-        if _has(scene_dir, MARKER):
+        if _has(scene_dir, MARKER) or scene_dir == os.path.abspath(SCENE_DIR):
             # An older scene that an earlier version of this script put here. It is a download
-            # cache and nothing else, so it is set aside and fetched again.
+            # cache and nothing else, so it is set aside and fetched again. The first version
+            # left no marker, but it only ever installed into the default directory.
             old = f"{scene_dir}.v{_version(scene_dir)}"
             print(f"The scene in {scene_dir} is an older version. Moving it to {old} and fetching the current one.")
             if os.path.exists(old):
