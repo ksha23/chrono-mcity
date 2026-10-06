@@ -4,7 +4,7 @@ The [Mcity Test Facility digital twin](https://github.com/mcity/mcity-digital-tw
 [PyChrono](https://projectchrono.org) scene, in one Python script. It runs on stock PyChrono.
 Nothing is converted and Chrono is not modified.
 
-![An Audi on a Mcity road in the Chrono VSG window](docs/mcity.jpg)
+![An Audi on a Mcity road in the Chrono VSG window, with trees and sky](docs/mcity.jpg)
 
 ## Run it
 
@@ -14,7 +14,7 @@ curl -LO https://raw.githubusercontent.com/ksha23/chrono-mcity/main/mcity.py
 python mcity.py
 ```
 
-The first run downloads the scene (200 MB) into `scene/` beside the script, checks its SHA-256
+The first run downloads the scene (211 MB) into `scene/` beside the script, checks its SHA-256
 and unpacks it. Later runs start in a few seconds.
 
 Drive with **W/S** for throttle and brake and **A/D** to steer.
@@ -22,6 +22,9 @@ Drive with **W/S** for throttle and brake and **A/D** to steer.
 | Option | |
 | --- | --- |
 | `--foliage LEVEL` | vegetation: `none`, `trees`, `trees-leaf`, `shrubs` or `full`. See below |
+| `--signals COLOUR` | light the traffic signal lenses: `red`, `amber`, `green` or `all` |
+| `--no-sky` | plain background instead of the sky dome |
+| `--no-shadows` | do not draw shadows. Worth trying on a slow GPU |
 | `--data DIR` | keep the scene somewhere else |
 | `--tire pac02\|tmeasy\|rigid` | tire model, default `pac02` |
 | `--tire-step S` | tire internal step in seconds, default `1e-4` |
@@ -33,34 +36,34 @@ Drive with **W/S** for throttle and brake and **A/D** to steer.
 PyChrono has to come from the `projectchrono` conda channel. The `conda-forge` package of the
 same name has no vehicle or VSG module.
 
+The simulation holds real time. When a frame takes too long to draw, the script skips frames
+instead of slowing the car down.
+
 ## Vegetation
 
-Trees and shrubs are optional. Asking for a level downloads a second archive (160 MB) the first
+Trees and shrubs are optional. Asking for a level downloads a second archive (42 MB) the first
 time, into the same `scene/` directory:
 
 ```sh
-python mcity.py --foliage trees
+python mcity.py --foliage full
 ```
 
-| Level | Plants | Triangles drawn | On stock PyChrono (build 1187, M4 Pro, 48 GB) |
+| Level | Plants | Triangles in the scene | Stock PyChrono, shadows on |
 | --- | --- | --- | --- |
-| `none` | none | 1.4 M | real time, 5 GB |
-| `trees` | 383 trees, bare branches | 13 M | 0.26x real time, 10 GB |
-| `trees-leaf` | 447 trees with leaves | 22 M | about 0.15x real time, 14 GB |
-| `shrubs` | 1,623 trees and shrubs, bare branches | 60 M | does not run: the GPU ran out of memory at 32 GB |
-| `full` | 2,009 trees and shrubs with leaves | 143 M | not tried, about 70 GB by extrapolation |
+| `none` | none | 1.4 M | 46 frames/s, 5 GB |
+| `trees` | 447 trees, bare branches | 4.0 M | 45 frames/s, 6 GB |
+| `trees-leaf` | 447 trees with leaves | 5.4 M | 43 frames/s, 7 GB |
+| `shrubs` | 2,009 trees and shrubs, bare branches | 5.9 M | 39 frames/s, 7 GB |
+| `full` | 2,009 trees and shrubs with leaves | 5.9 M | 36 frames/s, 8 GB |
 
-The plants are scan-grade models, and stock Chrono::VSG gives every placement of a mesh its own
-vertex buffer and draws all of them every frame. That is why the cost follows the triangle count
-so closely, and why the two heavy levels are out of reach on stock PyChrono. The script checks
-the level against the machine's memory before downloading anything and stops if it will not fit.
-`--force` overrides that.
+Measured on PyChrono build 1187 on an M4 Pro, at real time.
 
-The heavy levels were built for a Chrono with two renderer changes, vertex welding and frustum
-culling, which are on the `feature/mcity-vehicle-demo` branch of
-[ksha23/chrono](https://github.com/ksha23/chrono/tree/feature/mcity-vehicle-demo) and not in
-upstream Chrono. With a PyChrono built from that branch, this same script loads `shrubs` in
-12.5 GB at 0.15x real time.
+The plants upstream are film-grade models, about 1.85 billion triangles for the site once their
+instanced branches are expanded. Stock Chrono::VSG draws every triangle of a scene every frame,
+and again for each shadow map, and on that machine it falls from 40 frames a second to 12
+somewhere between 6 and 8 million triangles. So each level is built to stay under 6 million.
+Trunks and branches are welded down, and leaves are thinned and then enlarged so the crown keeps
+its cover. From the road they read as trees. Up close the leaves are plainly oversized.
 
 ## Use Mcity in your own simulation
 
@@ -87,12 +90,18 @@ For vegetation, pass the level to both calls: `mcity.fetch(foliage="trees")` and
 - `add_scenery` puts every placement on a few fixed bodies as visual shapes. Pass
   `groups=["Static", "Terrain"]` to load only some of `Static`, `TrafficPoles`, `TrafficLights`,
   `StreetLights`, `TrafficLightCables`, `Terrain` and, with vegetation, `Foliage_Instanced`.
-- `add_ground` returns an initialized `RigidTerrain` over the road, sidewalk, curb and island
-  surfaces. They are the same triangles the scenery draws, so what you see is what you drive on.
+  `signals="red"` lights those signal lenses.
+- `add_ground` returns an initialized `RigidTerrain` over the road, gutter, sidewalk, curb and
+  island surfaces. They are the same triangles the scenery draws, so what you see is what you
+  drive on.
 - The site keeps its real elevation. The road is near **z = 274 m**, not z = 0. Use
   `ground_height` to place things: `RigidTerrain.GetHeight` returns 0 until the first
   `DoStepDynamics`.
 - `START_X`, `START_Y`, `START_YAW` are a pose on a lane, facing along it.
+- `mcity.sky(scene)` is the sky panorama, for `SetSkyDomeTexture`.
+- `mcity.manifest(scene)` is everything else upstream recorded, as a dict. See below.
+- For Chrono::Sensor, every material carries a class id. `mcity.labels(scene)` says what each
+  id means.
 
 The scene is plain files, so C++ Chrono or any other tool can read it too. `mcity_ground.obj`
 works directly with `RigidTerrain::AddPatch`.
@@ -100,10 +109,12 @@ works directly with `RigidTerrain::AddPatch`.
 ## What is in the scene
 
 ```
-mcity_scene.json     placement manifest: 229 assets, 859 placements in 6 groups
-mcity_ground.obj     drivable surfaces merged in world space, 111,258 triangles
-assets/              527 OBJ meshes, one per (asset, material)
-textures/            570 PNG maps: base colour, normal, roughness, metallic
+mcity_scene.json     manifest: 230 assets, 860 placements in 6 groups, 206 lights, 59 labels
+mcity_ground.obj     drivable surfaces merged in world space, 114,933 triangles
+assets/              531 OBJ meshes, one per (asset, material)
+textures/            681 PNG maps: base colour, normal, roughness, metallic, AO, opacity
+sky/mcity_sky.jpg    sky panorama
+McityMap_Main.xodr   the OpenDRIVE road network: 411 roads, 45 junctions, 69 signals
 LICENSE.mcity        the upstream MIT notice
 README.txt           the upstream and converter commits this copy was built from
 ```
@@ -112,26 +123,43 @@ Lengths are metres and Z is up, Chrono's own frame. The manifest looks like this
 
 ```json
 {
+  "version": 2,
+  "labels": { "Q8004": "traffic light", "Q34442": "road" },
   "assets": [
-    { "name": "SM_BarrierNose_s001_v01",
+    { "name": "SM_McityFacades_s002",
       "parts": [
-        { "mesh": "assets/SM_BarrierNose_s001_v01__MI_BarrierNose_s001_Metal.obj",
-          "texture": "textures/T_BarrierNose_s001_Metal_BC.png",
-          "normal": "textures/T_BarrierNose_s001_Metal_NRM.png",
-          "roughness": "textures/T_BarrierNose_s001_Metal_RGH.png",
-          "metallic": "textures/T_BarrierNose_s001_Metal_MET.png",
+        { "name": "MI_McityFacades_s002_Glass",
+          "mesh": "assets/SM_McityFacades_s002__MI_McityFacades_s002_Glass.obj",
+          "texture": "textures/T_McityFacades_s002_Glass_BC.png",
+          "normal": null,
+          "roughness": "textures/T_McityFacades_s002_Glass_RGH.png",
+          "metallic": "textures/T_McityFacades_s002_Glass_MET.png",
+          "opacity": "textures/T_McityFacades_s002_Glass_ALPH.png",
           "colour": [1.0, 1.0, 1.0], "ks": [0.05, 0.05, 0.05], "ns": 10.0 } ] } ],
   "instances": [
-    { "asset": 0, "group": "Static",
-      "pos": [156.7052, -64.9924, 271.0522],
-      "rot": [0.999323, 0.011311, -0.033883, -0.008853],
-      "scale": [1.0, 1.0, 1.0] } ]
+    { "asset": 158, "group": "TrafficLights", "name": "SM_McityTrafficLight_s001_ID_853",
+      "label": "Q8004",
+      "pos": [106.3971, 22.4955, 277.676],
+      "rot": [0.707107, 0.0, 0.0, 0.707107],
+      "scale": [120.0, 120.0, 120.0] } ],
+  "lights": [
+    { "name": "disk_light_red", "owner": "SM_McityTrafficLight_s001_ID_857",
+      "pos": [99.9833, 45.8896, 278.7457], "dir": [1.0, 0.0, 0.0],
+      "colour": [1.0, 0.0, 0.0], "intensity": 10000.0, "cone_angle": 180.0 } ],
+  "sky": "sky/mcity_sky.jpg",
+  "road_network": "McityMap_Main.xodr"
 }
 ```
 
-An asset is a list of single-material meshes. An instance places asset number `asset` at `pos`
-with `rot` as a (w, x, y, z) quaternion and a per-axis `scale`. Paths are relative to the
-manifest, and a texture entry is `null` where upstream published no map for that material.
+- An asset is a list of single-material meshes. Besides the four maps every part lists, a part
+  may have `ao`, `opacity` and `emissive_texture` maps, an `emissive` colour, `roughness_value`
+  and `metallic_value` constants, and a `uv_scale`.
+- An instance places asset number `asset` at `pos` with `rot` as a (w, x, y, z) quaternion and a
+  per-axis `scale`. `name` is the upstream prim name. A traffic light's name ends in its
+  OpenDRIVE signal id. `label` is the Wikidata id upstream tagged it with, named in `labels`.
+- `lights` are the signal lamps: where each one is, which way it faces and its colour. Chrono
+  shapes carry no lights, so they are data for you to use.
+- Paths are relative to the manifest.
 
 The vegetation archive adds one manifest per level (`mcity_scene_trees_bare.json`,
 `mcity_scene_trees_leaf.json`, `mcity_scene_all_bare.json`, `mcity_scene_full.json`) and a
@@ -140,25 +168,35 @@ The vegetation archive adds one manifest per level (`mcity_scene_trees_bare.json
 To fetch the scene without the script:
 
 ```sh
-curl -LO https://github.com/ksha23/chrono-mcity/releases/download/v1/mcity_scene_base.tar.gz
-echo "41b0e14eb0a10609fde95621a2085ab194d8aa4de45054bb8f09a76a766a41f7  mcity_scene_base.tar.gz" | shasum -a 256 -c
+curl -LO https://github.com/ksha23/chrono-mcity/releases/download/v2/mcity_scene_base.tar.gz
+echo "daf79764350bba37878437541de591e152d8187e5a35aa0878054559b154735a  mcity_scene_base.tar.gz" | shasum -a 256 -c
 mkdir scene && tar -xzf mcity_scene_base.tar.gz -C scene
 
 # optional vegetation, over the top
-curl -LO https://github.com/ksha23/chrono-mcity/releases/download/v1/mcity_scene_foliage.tar.gz
-echo "246434ba4e3249fd50b08cf50411b38f48bd6d451575a3731401139c35995c87  mcity_scene_foliage.tar.gz" | shasum -a 256 -c
+curl -LO https://github.com/ksha23/chrono-mcity/releases/download/v2/mcity_scene_foliage.tar.gz
+echo "443f33b83a76f4d8158f441d238473087a9e779f3d194407a307ad9daad33527  mcity_scene_foliage.tar.gz" | shasum -a 256 -c
 tar -xzf mcity_scene_foliage.tar.gz -C scene
 ```
 
-## What is not here
+## What the conversion changes
 
-- **The road network.** Upstream also publishes an OpenDRIVE file. This scene has no lanes or
-  junctions, only surfaces. Get `McityMap_Main.xodr` from the upstream repository if you need it.
+The scene is not a byte copy of upstream. These are the deliberate differences:
+
+- **Textures are smaller.** Base colour is capped at 1024 pixels and the other maps at 512,
+  because Chrono::VSG holds every texture uncompressed. Upstream is mostly 2048.
+- **Ground materials are baked.** Roads, grass and gravel are two-layer blends upstream, driven
+  by a noise mask. Chrono has one texture per material, so each blend is baked into one tile.
+- **Vegetation is reduced**, as described above.
+- **Signal lenses are dark** unless you light them. Upstream has every lamp on at once.
+- **The road network's elevation is not the road mesh's.** They share a frame and agree at the
+  median, but differ by up to about 0.3 m either way at the 5th and 95th percentiles. Drive on
+  the mesh.
 
 ## Tested with
 
-PyChrono 10.0.0 from the `projectchrono` channel, conda builds `py313_1187` and `py312_677`, on
-macOS (Apple silicon). Linux and Windows have not been tried.
+PyChrono 10.0.0 from the `projectchrono` channel, conda build `py313_1187`, on macOS (Apple
+silicon). The first release was also run on build `py312_677`. Linux and Windows have not been
+tried.
 
 ## How the scene was built
 
@@ -167,11 +205,12 @@ Converted once from the upstream USD stage, so nobody else has to:
 | | |
 | --- | --- |
 | Upstream | [`mcity/mcity-digital-twin@3e8096b`](https://github.com/mcity/mcity-digital-twin/tree/3e8096b8ea2e48762cd512839d9dc8559814f6e6), stage `Omniverse/Collected_McityMap_NSR_v4_1_6/McityMap_Main.usdc` |
-| Converter | [`ksha23/chrono@529de85`](https://github.com/ksha23/chrono/tree/529de857033aa420fe456fae0180737832224f2f/src/demos/vehicle/terrain/mcity), `usd_to_chrono.py` and `resolve_textures.py` |
+| Converter | [`ksha23/chrono@78a9769`](https://github.com/ksha23/chrono/tree/78a9769cb0b1e87d0f47c26e2429ef11bf2489a8/src/demos/vehicle/terrain/mcity) |
 
-Re-running the converter at that commit reproduces the base scene's manifest, its ground mesh
-and all 527 of its meshes byte for byte. The vegetation levels come from `decimate_foliage.py`
-in the same directory and were not re-run for this check.
+Release `v1` was the first conversion. An audit against the upstream stage then found it had
+missed most of every tree, one traffic light, the gutters in the collision ground, ten
+materials' textures, glass opacity, lamp emission, the sky, the labels and the lights. `v2` is
+the conversion with those fixed.
 
 ## Licence and credit
 

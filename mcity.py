@@ -5,13 +5,13 @@
     conda install projectchrono::pychrono -c conda-forge    # once, from the projectchrono channel
     python mcity.py
 
-The first run downloads the scene (200 MB) into scene/ beside this file and checks its hash.
+The first run downloads the scene (211 MB) into scene/ beside this file and checks its hash.
 After that it starts straight away. Nothing is converted and Chrono is not modified: this needs
 only a stock PyChrono with the vehicle and VSG modules.
 
 Controls: W/S throttle and brake, A/D steer, plus the usual VSG camera keys.
 
-Vegetation is optional, a second download of 160 MB that happens the first time you ask for it:
+Vegetation is optional, a second download that happens the first time you ask for it:
 
     python mcity.py --foliage trees     # or trees-leaf, shrubs, full
 
@@ -39,12 +39,12 @@ import urllib.request
 
 # The published scene. Pinned archives, each checked against its hash before anything is unpacked,
 # so a changed or truncated download fails here and not later as a half-loaded scene.
-RELEASE = "https://github.com/ksha23/chrono-mcity/releases/download/v1/"
+RELEASE = "https://github.com/ksha23/chrono-mcity/releases/download/v2/"
 SCENE_URL = RELEASE + "mcity_scene_base.tar.gz"
-SCENE_SHA256 = "41b0e14eb0a10609fde95621a2085ab194d8aa4de45054bb8f09a76a766a41f7"
+SCENE_SHA256 = "daf79764350bba37878437541de591e152d8187e5a35aa0878054559b154735a"
 # Vegetation, as an add-on that unpacks over the base scene. Only fetched when asked for.
 FOLIAGE_URL = RELEASE + "mcity_scene_foliage.tar.gz"
-FOLIAGE_SHA256 = "246434ba4e3249fd50b08cf50411b38f48bd6d451575a3731401139c35995c87"
+FOLIAGE_SHA256 = "443f33b83a76f4d8158f441d238473087a9e779f3d194407a307ad9daad33527"
 SCENE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scene")
 
 MANIFEST = "mcity_scene.json"
@@ -60,12 +60,15 @@ FOLIAGE = {
     "full": "mcity_scene_full.json",
 }
 
-# Roughly what each level needs in memory on stock PyChrono, in GB. Stock Chrono::VSG gives every
-# placement of a mesh its own vertex buffer, so the cost follows the triangles placed and not the
-# triangles stored: 1.4 M with no vegetation, 13 M, 22 M, 60 M and 143 M for the four levels.
-# The first three are measured on build 1187. At "shrubs" the GPU ran out on a 48 GB machine, and
-# "full" is extrapolated from its triangle count.
-FOLIAGE_MEMORY_GB = {"none": 5, "trees": 10, "trees-leaf": 14, "shrubs": 32, "full": 70}
+# What each level needs in memory on stock PyChrono, in GB, measured on build 1187. Stock
+# Chrono::VSG gives every placement of a mesh its own vertex buffer and draws all of them again
+# for each shadow map, so every level is built to stay under 6 M triangles: 1.4 M with no
+# vegetation, then 4.0, 5.5, 5.9 and 5.9 M.
+FOLIAGE_MEMORY_GB = {"none": 5, "trees": 7, "trees-leaf": 8, "shrubs": 8, "full": 8}
+
+# The scene format this script expects. fetch() replaces an older scene it installed itself.
+SCENE_VERSION = 2
+MARKER = ".mcity-scene"
 
 # A pose on a real Mcity lane, facing along the carriageway: x, y in metres and yaw in radians.
 # The site keeps its real elevation, so the road here is near z = 274 m and not z = 0.
@@ -87,11 +90,28 @@ def fetch(scene_dir=SCENE_DIR, foliage="none"):
         raise ValueError(f"unknown foliage level {foliage!r}, expected one of {', '.join(FOLIAGE)}")
     scene_dir = os.path.abspath(scene_dir)
 
-    if not (_has(scene_dir, MANIFEST) and _has(scene_dir, GROUND)):
+    have = _has(scene_dir, MANIFEST) and _has(scene_dir, GROUND)
+    if have and _version(scene_dir) < SCENE_VERSION:
+        if _has(scene_dir, MARKER):
+            # An older scene that an earlier version of this script put here. It is a download
+            # cache and nothing else, so it is set aside and fetched again.
+            old = f"{scene_dir}.v{_version(scene_dir)}"
+            print(f"The scene in {scene_dir} is an older version. Moving it to {old} and fetching the current one.")
+            if os.path.exists(old):
+                raise SystemExit(f"{old} is in the way. Remove it and run again.")
+            os.replace(scene_dir, old)
+            have = False
+        else:
+            print(f"Note: {scene_dir} holds an older scene (version {_version(scene_dir)}, this script expects "
+                  f"{SCENE_VERSION}). It was not installed by this script, so it is used as it is.")
+
+    if not have:
         if os.path.isdir(scene_dir) and os.listdir(scene_dir):
             raise SystemExit(f"{scene_dir} exists but holds no Mcity scene. Remove it, or pass another --data directory.")
         print(f"Mcity scene not found in {scene_dir}")
         partial = _download_and_unpack(os.environ.get("MCITY_SCENE_URL", SCENE_URL), SCENE_SHA256, scene_dir)
+        with open(os.path.join(partial, MARKER), "w") as f:
+            f.write(f"installed by mcity.py, scene version {SCENE_VERSION}\n")
         if os.path.isdir(scene_dir):
             os.rmdir(scene_dir)
         os.replace(partial, scene_dir)
@@ -104,6 +124,15 @@ def fetch(scene_dir=SCENE_DIR, foliage="none"):
         print("  vegetation ready")
 
     return scene_dir
+
+
+def _version(scene_dir):
+    """The scene format version a manifest declares. The first published scene declared none."""
+    try:
+        with open(os.path.join(scene_dir, MANIFEST)) as f:
+            return int(json.load(f).get("version", 1))
+    except (OSError, ValueError):
+        return 0
 
 
 def _has(scene_dir, name):
@@ -190,7 +219,7 @@ def _remove(path):
 # --------------------------------------------------------------------------------------------
 
 
-def add_scenery(system, scene_dir, foliage="none", groups=None, verbose=True):
+def add_scenery(system, scene_dir, foliage="none", groups=None, signals=None, verbose=True):
     """Add everything you see: buildings, poles, signals, signs, barriers and the road surface.
 
     The manifest lists a few hundred meshes and the placements they appear at. Each mesh becomes
@@ -200,6 +229,13 @@ def add_scenery(system, scene_dir, foliage="none", groups=None, verbose=True):
 
     foliage picks the vegetation level, one of FOLIAGE. Anything but "none" needs the add-on
     that fetch(foliage=...) downloads. groups, if given, keeps only those manifest groups.
+
+    signals lights the traffic signal lenses: "red", "amber", "green", or "all". The scene is
+    static and has no signal phases, so by default every lens is dark.
+
+    Every part's material also gets a class id for Chrono::Sensor's segmentation camera, taken
+    from the label upstream gave the asset. labels(scene_dir) lists what the ids mean.
+
     Returns the bodies, one per group.
     """
     import pychrono as chrono
@@ -210,6 +246,7 @@ def add_scenery(system, scene_dir, foliage="none", groups=None, verbose=True):
     with open(manifest) as f:
         doc = json.load(f)
     assets = doc["assets"]
+    class_ids = _class_ids(doc)
 
     meshes = {}     # mesh path -> ChTriangleMeshConnected, or None if unusable
     materials = {}  # mesh path -> ChVisualMaterial
@@ -254,7 +291,11 @@ def add_scenery(system, scene_dir, foliage="none", groups=None, verbose=True):
                     material.SetSpecularColor(chrono.ChColor(*part.get("ks", [0.05, 0.05, 0.05])))
                     material.SetSpecularExponent(ns)
                     # Wavefront Ns is the inverse sense of PBR roughness.
-                    material.SetRoughness(1.0 - min(1.0, ns / 100.0))
+                    material.SetRoughness(part.get("roughness_value", 1.0 - min(1.0, ns / 100.0)))
+                    if "metallic_value" in part:
+                        material.SetMetallic(part["metallic_value"])
+                    if "uv_scale" in part:
+                        material.SetTextureScale(*part["uv_scale"])
                     texture = _existing(scene_dir, part.get("texture"))
                     if texture:
                         material.SetKdTexture(texture)
@@ -268,6 +309,20 @@ def add_scenery(system, scene_dir, foliage="none", groups=None, verbose=True):
                     if roughness and metallic:
                         material.SetRoughnessTexture(roughness)
                         material.SetMetallicTexture(metallic)
+                    ao = _existing(scene_dir, part.get("ao"))
+                    if ao:
+                        material.SetAmbientOcclusionTexture(ao)
+                    # Glass and netting. Without this they draw as solid panels.
+                    opacity = _existing(scene_dir, part.get("opacity"))
+                    if opacity:
+                        material.SetOpacityTexture(opacity)
+                    if "emissive" in part and _lit(part["name"], signals):
+                        material.SetEmissiveColor(chrono.ChColor(*part["emissive"]))
+                        glow = _existing(scene_dir, part.get("emissive_texture"))
+                        if glow:
+                            material.SetKeTexture(glow)
+                    if inst["asset"] in class_ids:
+                        material.SetClassID(class_ids[inst["asset"]])
                     materials[path] = material
 
                 shape = chrono.ChVisualShapeTriangleMesh()
@@ -308,6 +363,46 @@ def add_scenery(system, scene_dir, foliage="none", groups=None, verbose=True):
         if skipped:
             print(f"    ({skipped} placements skipped: their meshes are missing)")
     return list(bodies.values())
+
+
+def _lit(material_name, signals):
+    """Whether a lens material is one the caller asked to light. They are named emit_<colour>."""
+    if not signals:
+        return False
+    return signals == "all" or material_name.lower().endswith("_" + signals)
+
+
+def _class_ids(doc):
+    """asset index -> class id, numbering the manifest's labels from 1 in their listed order."""
+    order = {q: n for n, q in enumerate(doc.get("labels", {}), start=1)}
+    out = {}
+    for inst in doc["instances"]:
+        if inst.get("label") in order:
+            out.setdefault(inst["asset"], order[inst["label"]])
+    return out
+
+
+def manifest(scene_dir, foliage="none"):
+    """The scene manifest as a dict, for the parts of it that are data and not geometry.
+
+    "instances" name every placement (a traffic light's name ends in its OpenDRIVE signal id) and
+    give its label. "lights" lists the signal lamps with position, direction and colour.
+    "labels" maps label ids to names. "road_network" and "sky" are paths relative to scene_dir.
+    """
+    with open(os.path.join(scene_dir, FOLIAGE[foliage])) as f:
+        return json.load(f)
+
+
+def labels(scene_dir):
+    """class id -> (Wikidata id, name) for the class ids add_scenery puts on materials."""
+    doc = manifest(scene_dir)
+    return {n: (q, name) for n, (q, name) in enumerate(doc.get("labels", {}).items(), start=1)}
+
+
+def sky(scene_dir):
+    """Path of the sky panorama, or None for a scene that has none."""
+    relative = manifest(scene_dir).get("sky")
+    return _existing(scene_dir, relative)
 
 
 def _existing(scene_dir, relative):
@@ -364,13 +459,13 @@ def ground_height(scene_dir, x, y, radius=2.0):
 # The demo
 # --------------------------------------------------------------------------------------------
 
-FOLIAGE_HELP = """vegetation level (default: none). The first use downloads 160 MB more.
-Memory is what stock PyChrono needs, and anything but none draws slower than real time.
+FOLIAGE_HELP = """vegetation level (default: none). The first use downloads the vegetation archive.
+Memory is what stock PyChrono needs.
   none        no vegetation                          5 GB
-  trees       383 trees, bare branches              10 GB
-  trees-leaf  447 trees with leaves                 14 GB
-  shrubs      1623 trees and shrubs, bare branches  32 GB
-  full        2009 trees and shrubs with leaves     70 GB"""
+  trees       447 trees, bare branches               7 GB
+  trees-leaf  447 trees with leaves                  8 GB
+  shrubs      2009 trees and shrubs, bare branches   8 GB
+  full        2009 trees and shrubs with leaves      8 GB"""
 
 TIRES = {"pac02": "audi/json/audi_Pac02Tire.json", "tmeasy": "audi/json/audi_TMeasyTire.json", "rigid": "audi/json/audi_RigidTire.json"}
 
@@ -382,6 +477,9 @@ def main():
     )
     parser.add_argument("--data", metavar="DIR", default=SCENE_DIR, help="scene directory, downloaded into if empty (default: scene/ beside this file)")
     parser.add_argument("--foliage", choices=list(FOLIAGE), default="none", help=FOLIAGE_HELP)
+    parser.add_argument("--signals", choices=["red", "amber", "green", "all"], default=None, help="light the traffic signal lenses of that colour (default: all dark)")
+    parser.add_argument("--no-sky", action="store_true", help="plain background instead of the sky dome")
+    parser.add_argument("--no-shadows", action="store_true", help="do not draw shadows. Worth trying on a slow GPU: stock Chrono redraws the scene for every shadow map")
     parser.add_argument("--tire", choices=sorted(TIRES), default="pac02", help="tire model (default: pac02)")
     parser.add_argument("--tire-step", metavar="S", type=float, default=1e-4, help="tire internal step in seconds (default: 1e-4)")
     parser.add_argument("--speed-limit", metavar="V", type=float, default=20.0, help="speed the throttle ramp is scaled toward, m/s (default: 20)")
@@ -405,14 +503,13 @@ def main():
     # A headless run draws nothing, so it has no use for vegetation.
     foliage = "none" if args.headless else args.foliage
     if foliage != "none":
-        # Checked before the download, so nobody fetches 160 MB only to be turned away.
+        # Checked before the download, so nobody fetches an archive only to be turned away.
         need, have = FOLIAGE_MEMORY_GB[foliage], _physical_memory_gb()
-        print(f"Vegetation level '{foliage}' needs about {need} GB of memory on stock PyChrono and draws slower than real time.")
         if have is not None and need > 0.6 * have and not args.force:
             raise SystemExit(
-                f"  That is too much for the {have:.0f} GB in this machine. Stock Chrono::VSG keeps a separate copy\n"
-                "  of the geometry for every plant, so the heavier levels run the GPU out of memory.\n"
-                "  Pick a lighter level, or pass --force to try anyway."
+                f"Vegetation level '{foliage}' needs about {need} GB of memory on stock PyChrono, which is too much\n"
+                f"for the {have:.0f} GB in this machine. Stock Chrono::VSG keeps a separate copy of the geometry\n"
+                "for every plant. Pick a lighter level, or pass --force to try anyway."
             )
     scene = fetch(args.data, foliage)
     boot = time.perf_counter()
@@ -427,7 +524,7 @@ def main():
     system.SetMaxPenetrationRecoverySpeed(4.0)
 
     if not args.headless:
-        add_scenery(system, scene, foliage)
+        add_scenery(system, scene, foliage, signals=args.signals)
     terrain = add_ground(system, scene)
 
     z = ground_height(scene, START_X, START_Y)
@@ -455,7 +552,7 @@ def main():
     if args.headless:
         run_headless(system, audi, terrain, veh, step, args.duration if args.duration is not None else 5.0, z)
     else:
-        run_window(system, audi, terrain, chrono, veh, step, args, boot)
+        run_window(system, audi, terrain, chrono, veh, step, args, boot, None if args.no_sky else sky(scene))
 
     # Tearing the visual system down from Python can crash on the way out, after everything has
     # already worked. Leave without running destructors.
@@ -470,7 +567,7 @@ def _physical_memory_gb():
         return None
 
 
-def run_window(system, audi, terrain, chrono, veh, step, args, boot):
+def run_window(system, audi, terrain, chrono, veh, step, args, boot, sky_texture):
     driver = veh.ChInteractiveDriver(audi)
     driver.SetSteeringDelta(0.04)
     driver.SetThrottleDelta(1.0 / max(1.0, args.speed_limit))
@@ -484,7 +581,12 @@ def run_window(system, audi, terrain, chrono, veh, step, args, boot):
     vis.SetChaseCamera(chrono.ChVector3d(0.0, 0.0, 1.75), 7.0, 0.6)
     vis.SetLightIntensity(1.0)
     vis.SetLightDirection(1.5 * chrono.CH_PI_2, chrono.CH_PI_4)
-    vis.EnableShadows()
+    if not args.no_shadows:
+        vis.EnableShadows()
+    if sky_texture:
+        # The second argument is where the sun sits in the picture. This sky has no visible sun.
+        vis.SetSkyDomeTexture(sky_texture, 0.0)
+        vis.EnableSkyTexture()
     vis.AttachDriver(driver)
     vis.Initialize()
 
@@ -493,23 +595,39 @@ def run_window(system, audi, terrain, chrono, veh, step, args, boot):
 
     render_step = 1.0 / 50  # physics wants 1 kHz, the display does not
     next_render = next_report = 0.0
-    realtime = chrono.ChRealtimeStepTimer()
+    last_render = -1.0
+    frames = 0
     start = time.perf_counter()
+    clock = start  # the wall-clock instant that simulated time 0 is held against
 
     while vis.Run():
         now = system.GetChTime()
         if args.duration is not None and now >= args.duration:
             break
 
-        if now >= next_render:
+        # How far the simulation has fallen behind the wall clock. A stall that long is the
+        # window being dragged or the machine being busy, and is written off instead of chased.
+        lag = (time.perf_counter() - clock) - now
+        if lag > 0.5:
+            clock += lag - 0.05
+            lag = 0.05
+
+        # Draw only when the simulation is keeping up. Heavy vegetation can take longer to draw
+        # than a 50 Hz frame lasts, and drawing every frame regardless turns that into slow
+        # motion. Skipping frames keeps the car at real time and lets the frame rate drop
+        # instead, down to a floor of five a second.
+        if now >= next_render and (lag < render_step or now - last_render >= 0.2):
             vis.BeginScene()
             vis.Render()
             vis.EndScene()
-            next_render += render_step
+            frames += 1
+            last_render = now
+            next_render = now + render_step
 
         if now >= next_report:
             wall = time.perf_counter() - start
-            print(f"  t={now:5.1f} s   {now / wall if wall > 0 else 0:.2f}x real time   {audi.GetSpeed():5.1f} m/s")
+            print(f"  t={now:5.1f} s   {now / wall if wall > 0 else 0:.2f}x real time   "
+                  f"{frames / wall if wall > 0 else 0:4.1f} frames/s   {audi.GetSpeed():5.1f} m/s")
             next_report += 2.0
 
         inputs = driver.GetInputs()
@@ -524,10 +642,10 @@ def run_window(system, audi, terrain, chrono, veh, step, args, boot):
         vis.Advance(step)
         system.DoStepDynamics(step)
 
-        # Pace once per rendered frame and not once per physics step, so the fast steps between
-        # two frames can absorb the cost of drawing one.
-        if now >= next_render - step:
-            realtime.Spin(render_step)
+        # Physics alone runs several times faster than real time, so wait for the clock.
+        ahead = (now + step) - (time.perf_counter() - clock)
+        if ahead > 0.002:
+            time.sleep(ahead - 0.001)
 
 
 def run_headless(system, audi, terrain, veh, step, duration, road_z):
