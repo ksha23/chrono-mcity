@@ -39,12 +39,12 @@ import urllib.request
 
 # The published scene. Pinned archives, each checked against its hash before anything is unpacked,
 # so a changed or truncated download fails here and not later as a half-loaded scene.
-RELEASE = "https://github.com/ksha23/chrono-mcity/releases/download/v2/"
+RELEASE = "https://github.com/ksha23/chrono-mcity/releases/download/v3/"
 SCENE_URL = RELEASE + "mcity_scene_base.tar.gz"
-SCENE_SHA256 = "daf79764350bba37878437541de591e152d8187e5a35aa0878054559b154735a"
+SCENE_SHA256 = "af202b7cf7f3e2356c3fc18c1262f3edf314a9bb6e317d18c485ef9c9a60bbe6"
 # Vegetation, as an add-on that unpacks over the base scene. Only fetched when asked for.
 FOLIAGE_URL = RELEASE + "mcity_scene_foliage.tar.gz"
-FOLIAGE_SHA256 = "443f33b83a76f4d8158f441d238473087a9e779f3d194407a307ad9daad33527"
+FOLIAGE_SHA256 = "f2903e5444a389b579ee545e36bf78e5b86457f78e20f878fc9d6721c7df987b"
 SCENE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scene")
 
 MANIFEST = "mcity_scene.json"
@@ -68,6 +68,9 @@ FOLIAGE_MEMORY_GB = {"none": 5, "trees": 7, "trees-leaf": 8, "shrubs": 8, "full"
 
 # The scene format this script expects. fetch() replaces an older scene it installed itself.
 SCENE_VERSION = 2
+# The vegetation has a version of its own. 1 had leaves enlarged without limit, some of them
+# metres across. 2 draws many modest leaves and proper branches.
+FOLIAGE_VERSION = 2
 MARKER = ".mcity-scene"
 
 # A pose on a real Mcity lane, facing along the carriageway: x, y in metres and yaw in radians.
@@ -118,13 +121,31 @@ def fetch(scene_dir=SCENE_DIR, foliage="none"):
         os.replace(partial, scene_dir)
         print(f"  scene ready in {scene_dir}")
 
-    if foliage != "none" and not all(_has(scene_dir, m) for m in FOLIAGE.values()):
-        print(f"Mcity vegetation not found in {scene_dir}")
-        partial = _download_and_unpack(os.environ.get("MCITY_FOLIAGE_URL", FOLIAGE_URL), FOLIAGE_SHA256, scene_dir)
-        _merge(partial, scene_dir)
-        print("  vegetation ready")
+    if foliage != "none":
+        present = all(_has(scene_dir, m) for m in FOLIAGE.values())
+        if present and _foliage_version(scene_dir) < FOLIAGE_VERSION:
+            if _has(scene_dir, MARKER) or scene_dir == os.path.abspath(SCENE_DIR):
+                print(f"The vegetation in {scene_dir} is an older version. Fetching the current one over it.")
+                present = False
+            else:
+                print(f"Note: {scene_dir} holds older vegetation (version {_foliage_version(scene_dir)}, this "
+                      f"script expects {FOLIAGE_VERSION}). It was not installed by this script, so it is used as it is.")
+        if not present:
+            print(f"Fetching Mcity vegetation into {scene_dir}")
+            partial = _download_and_unpack(os.environ.get("MCITY_FOLIAGE_URL", FOLIAGE_URL), FOLIAGE_SHA256, scene_dir)
+            _merge(partial, scene_dir)
+            print("  vegetation ready")
 
     return scene_dir
+
+
+def _foliage_version(scene_dir):
+    """The version the vegetation manifests declare. The first published set declared none."""
+    try:
+        with open(os.path.join(scene_dir, FOLIAGE["full"])) as f:
+            return int(json.load(f).get("vegetation", 1))
+    except (OSError, ValueError):
+        return 0
 
 
 def _version(scene_dir):

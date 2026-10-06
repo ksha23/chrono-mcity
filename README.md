@@ -51,10 +51,10 @@ python mcity.py --foliage full
 | Level | Plants | Triangles in the scene | Stock PyChrono, shadows on |
 | --- | --- | --- | --- |
 | `none` | none | 1.4 M | 46 frames/s, 5 GB |
-| `trees` | 447 trees, bare branches | 4.0 M | 45 frames/s, 6 GB |
+| `trees` | 447 trees, bare branches | 4.0 M | 44 frames/s, 6 GB |
 | `trees-leaf` | 447 trees with leaves | 5.4 M | 43 frames/s, 7 GB |
-| `shrubs` | 2,009 trees and shrubs, bare branches | 5.9 M | 39 frames/s, 7 GB |
-| `full` | 2,009 trees and shrubs with leaves | 5.9 M | 36 frames/s, 8 GB |
+| `shrubs` | 2,009 trees and shrubs, bare branches | 5.9 M | 40 frames/s, 7 GB |
+| `full` | 2,009 trees and shrubs with leaves | 5.9 M | 38 frames/s, 8 GB |
 
 Measured on PyChrono build 1187 on an M4 Pro, at real time.
 
@@ -62,8 +62,12 @@ The plants upstream are film-grade models, about 1.85 billion triangles for the 
 instanced branches are expanded. Stock Chrono::VSG draws every triangle of a scene every frame,
 and again for each shadow map, and on that machine it falls from 40 frames a second to 12
 somewhere between 6 and 8 million triangles. So each level is built to stay under 6 million.
-Trunks and branches are welded down, and leaves are thinned and then enlarged so the crown keeps
-its cover. From the road they read as trees. Up close the leaves are plainly oversized.
+
+A tree gets about 7,000 triangles. Its trunk is welded down. Each branch keeps its few real
+stems, redrawn as tapered sticks, and loses most of its thousand twigs. Its leaves are thinned
+to about a thousand, each drawn as a simple outline and enlarged to win back cover, up to a
+twentieth of the tree's height. That is larger than a real leaf and it shows up close. From the
+road it reads as a tree.
 
 ## Use Mcity in your own simulation
 
@@ -168,13 +172,13 @@ The vegetation archive adds one manifest per level (`mcity_scene_trees_bare.json
 To fetch the scene without the script:
 
 ```sh
-curl -LO https://github.com/ksha23/chrono-mcity/releases/download/v2/mcity_scene_base.tar.gz
-echo "daf79764350bba37878437541de591e152d8187e5a35aa0878054559b154735a  mcity_scene_base.tar.gz" | shasum -a 256 -c
+curl -LO https://github.com/ksha23/chrono-mcity/releases/download/v3/mcity_scene_base.tar.gz
+echo "af202b7cf7f3e2356c3fc18c1262f3edf314a9bb6e317d18c485ef9c9a60bbe6  mcity_scene_base.tar.gz" | shasum -a 256 -c
 mkdir scene && tar -xzf mcity_scene_base.tar.gz -C scene
 
 # optional vegetation, over the top
-curl -LO https://github.com/ksha23/chrono-mcity/releases/download/v2/mcity_scene_foliage.tar.gz
-echo "443f33b83a76f4d8158f441d238473087a9e779f3d194407a307ad9daad33527  mcity_scene_foliage.tar.gz" | shasum -a 256 -c
+curl -LO https://github.com/ksha23/chrono-mcity/releases/download/v3/mcity_scene_foliage.tar.gz
+echo "f2903e5444a389b579ee545e36bf78e5b86457f78e20f878fc9d6721c7df987b  mcity_scene_foliage.tar.gz" | shasum -a 256 -c
 tar -xzf mcity_scene_foliage.tar.gz -C scene
 ```
 
@@ -205,12 +209,13 @@ Converted once from the upstream USD stage, so nobody else has to:
 | | |
 | --- | --- |
 | Upstream | [`mcity/mcity-digital-twin@3e8096b`](https://github.com/mcity/mcity-digital-twin/tree/3e8096b8ea2e48762cd512839d9dc8559814f6e6), stage `Omniverse/Collected_McityMap_NSR_v4_1_6/McityMap_Main.usdc` |
-| Converter | [`ksha23/chrono@78a9769`](https://github.com/ksha23/chrono/tree/78a9769cb0b1e87d0f47c26e2429ef11bf2489a8/src/demos/vehicle/terrain/mcity) |
+| Converter | [`ksha23/chrono@e336e0a`](https://github.com/ksha23/chrono/tree/e336e0abe8636c0ac425e970f5a67fcd601e8194/src/demos/vehicle/terrain/mcity) |
 
 Release `v1` was the first conversion. An audit against the upstream stage then found it had
 missed most of every tree, one traffic light, the gutters in the collision ground, ten
 materials' textures, glass opacity, lamp emission, the sky, the labels and the lights. `v2` is
-the conversion with those fixed.
+the conversion with those fixed. `v3` rebuilds the vegetation again: `v2` kept its crowns full
+by enlarging leaves without limit, some to half the height of the tree.
 
 ## Licence and credit
 
